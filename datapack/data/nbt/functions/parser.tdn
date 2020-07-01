@@ -1,0 +1,283 @@
+@ on compile
+@ breaking
+
+define global static final class NBT {
+    public static parse(string: string): tag_compound {
+        return new NBTParser(string).parse()
+    }
+}
+
+define private class NBTParser {
+    private final var string: string
+    private var cursor: int
+    
+    private static final var BYTE_PATTERN =            "^[-+]?(0|[1-9][0-9]*)b$"
+    private static final var SHORT_PATTERN =           "^[-+]?(0|[1-9][0-9]*)s$"
+    private static final var INT_PATTERN =             "^[-+]?(0|[1-9][0-9]*)$"
+    private static final var LONG_PATTERN =            "^[-+]?(0|[1-9][0-9]*)l$"
+    private static final var FLOAT_PATTERN =           "^[-+]?([0-9]*[.][0-9]+|[0-9]+[.]?)(e[-+]?[0-9]+)?f$"
+    private static final var DOUBLE_PATTERN =          "^[-+]?([0-9]*[.][0-9]+|[0-9]+[.]?)(e[-+]?[0-9]+)?d$"
+    private static final var DOUBLE_PATTERN_NOSUFFIX = "^[-+]?([0-9]*[.][0-9]+|[0-9]+[.])(e[-+]?[0-9]+)?$"
+    
+    public new(string: string) {
+        eval this.string = string
+        eval cursor = 0
+    }
+    
+    private canRead(offset: int): boolean {
+        return cursor + offset <= string.length
+    }
+    
+    private canRead(): boolean {
+        return canRead(1)
+    }
+    
+    private peek(offset: int): string {
+        return string[cursor + offset]
+    }
+    
+    private peek(): string {
+        return peek(0)
+    }
+    
+    private skip() {
+        eval cursor++
+    }
+    
+    private read(): string {
+        return string[cursor++]
+    }
+    
+    private skipWhitespace() {
+        while (canRead() && peek().isWhitespace()) {
+            eval skip()
+        }
+    }
+    
+    private hasElementSeparator(): boolean {
+        eval skipWhitespace()
+        if (!canRead() || peek() != ",") return false
+        
+        eval skip()
+        eval skipWhitespace()
+        return true
+    }
+    
+    private throw(message: string) {
+        eval message += " at position " + cursor + ": "
+        if (cursor > 15)
+            eval message += "..."
+        eval message += string.substring(Math.max(0, cursor - 15), cursor) + "<--[HERE]"
+        throw message
+    }
+    
+    private expect(symbol: string) {
+        eval skipWhitespace()
+        if (!canRead() || peek() != symbol) eval throw("Expected '" + symbol + "'")
+        eval skip()
+    }
+    
+    private type(str: string) {
+        try {
+            if (str.matches(BYTE_PATTERN))
+                return new tag_byte(Integer.parseInt(str.substring(0, str.length - 1)))
+            
+            if (str.matches(SHORT_PATTERN))
+                return new tag_short(Integer.parseInt(str.substring(0, str.length - 1)))
+            
+            if (str.matches(INT_PATTERN))
+                return new tag_int(Integer.parseInt(str))
+            
+            if (str.matches(LONG_PATTERN))
+                return new tag_long(str.substring(0, str.length - 1))
+            
+            if (str.matches(FLOAT_PATTERN))
+                return new tag_float(Real.parseReal(str.substring(0, str.length - 1)))
+            
+            if (str.matches(DOUBLE_PATTERN))
+                return new tag_double(Real.parseReal(str.substring(0, str.length - 1)))
+            
+            if (str.matches(DOUBLE_PATTERN_NOSUFFIX))
+                return new tag_double(Real.parseReal(str))
+            
+            if (str.toLowerCase() == "true")
+                return new tag_byte(1)
+            
+            if (str.toLowerCase() == "false")
+                return new tag_byte(0)
+        } catch (e) {}
+        
+        return new tag_string(str)
+    }
+    
+    private parseTypedValue() {
+        eval skipWhitespace()
+        var start = cursor
+        
+        if (isQuotedStringStart(peek()))
+            return parseQuotedString()
+        
+        var result = parseUnquotedString()
+        if (result == "") {
+            eval cursor = start
+            eval throw("Expected value")
+        }
+        return type(result)
+    }
+    
+    private parseValue() {
+        eval skipWhitespace()
+        if (!canRead()) eval throw("Expected value")
+        switch (peek()) {
+            case "{": {return parseCompound()}
+            case "[": {return parseArrayOrList()}
+            default:  {return parseTypedValue()}
+        }
+    }
+    
+    private isQuotedStringStart(symbol: string): boolean {
+        return symbol == '"' || symbol == "'"
+    }
+    
+    private parseQuotedString() {
+        var result = ""
+        var quote = read()
+        var escaping = false
+        
+        while (canRead()) {
+            var symbol = read()
+            if (symbol == "\\")
+                eval escaping = true
+            else if (escaping) {
+                if (symbol != quote && symbol != "\\") {
+                    eval cursor--
+                    eval throw("Invalid escape sequence '\\" + symbol + "' in quoted string")
+                }
+                eval result += symbol
+                eval escaping = false
+            } else {
+                if (symbol == quote) return result
+                eval result += symbol
+            }
+        }
+        
+        eval throw("Unclosed quoted string")
+        return ""
+    }
+    
+    private isAllowedInUnquotedString(symbol: string): boolean {
+        var cPoint = Character.toCodePoint(symbol)
+        return symbol == "_" || symbol == "-" || symbol == "." || symbol == "+" ||
+            Character.toCodePoint("0") <= cPoint && cPoint <= Character.toCodePoint("9") ||
+            Character.toCodePoint("A") <= cPoint && cPoint <= Character.toCodePoint("Z") ||
+            Character.toCodePoint("a") <= cPoint && cPoint <= Character.toCodePoint("z")
+    }
+    
+    private parseUnquotedString() {
+        var start = cursor
+        
+        while (canRead() && isAllowedInUnquotedString(peek())) {
+            eval skip()
+        }
+        
+        return string.substring(start, cursor)
+    }
+    
+    private parseString() {
+        if (!canRead()) return ""
+        
+        if (isQuotedStringStart(peek())) 
+            return parseQuotedString()
+        return parseUnquotedString()
+    }
+    
+    private parseKey() {
+        eval skipWhitespace()
+        if (!canRead()) eval throw("Expected key")
+        return parseString()
+    }
+    
+    private parseArray() {
+        eval expect("[")
+        var type = read()
+        if (type != "B" && type != "I" && type != "L") {
+            eval cursor--
+            eval throw("Invalid array type '" + type + "'")
+        }
+        eval read()
+        eval skipWhitespace()
+        if (!canRead()) eval throw("Expected value")
+                
+        var result = []
+        while (canRead() && peek() != "]") {
+            eval result.add(parseValue())
+            
+            if (!hasElementSeparator()) {break}
+            if (!canRead()) eval throw("Expected value")
+        }
+        eval expect("]")
+        
+        switch (type) {
+            case "B": {return new tag_byte_array(result)}
+            case "I": {return new tag_int_array (result)}
+            case "L": {return new tag_long_array(result)}
+        }
+    }
+    
+    private parseList() {
+        eval expect("[")
+        eval skipWhitespace()
+            if (!canRead()) eval throw("Expected value")
+            
+            var result = []
+            while (canRead() && peek() != "]") {
+                eval result.add(parseValue())
+                
+                if (!hasElementSeparator()) {break}
+                if (!canRead()) eval throw("Expected value")
+            }
+            eval expect("]")
+            
+         return new nbt(result)
+    }
+    
+    private parseArrayOrList() {
+        if (canRead(3) && !isQuotedStringStart(peek(1)) && peek(2) == ";") 
+            return parseArray()
+        return parseList()
+    }
+    
+    private parseCompound() {
+        eval expect("{")
+        var result = {}
+        eval skipWhitespace()
+                        
+        while (canRead() && peek() != "}") {
+            var start = cursor
+            var key = parseKey()
+            if (key == "") {
+                eval cursor = start
+                eval throw("Expected key")
+            }
+            
+            eval expect(":")
+            eval result[key] = parseValue()
+            
+            if (!hasElementSeparator()) {break}
+            if (!canRead()) eval throw("Expected key")
+        }
+        eval expect("}")
+        
+        return new nbt(result)
+    }
+    
+    public parse(): tag_compound {
+        eval skipWhitespace()
+        var result = parseCompound()
+        eval skipWhitespace()
+        
+        if (canRead()) eval throw("Unexpected trailing data")
+        
+        return result
+    }
+}

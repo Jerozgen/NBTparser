@@ -6,7 +6,7 @@
 
 ## Usage
 
- ```py
+ ```kotlin
  NBT.parse(string: string): tag_compound
  ```
 
